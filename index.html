@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Finger Particle Trails</title>
+
+<style>
+*{box-sizing:border-box}
+html,body{
+    margin:0;
+    width:100%;
+    height:100%;
+    overflow:hidden;
+    background:#000;
+}
+canvas{
+    display:block;
+}
+#video{
+    position:fixed;
+    right:15px;
+    bottom:15px;
+    width:220px;
+    border-radius:15px;
+    transform:scaleX(-1);
+    z-index:10;
+    opacity:.8;
+}
+#text{
+    position:fixed;
+    top:15px;
+    left:15px;
+    color:white;
+    z-index:10;
+    font:16px Arial;
+}
+</style>
+</head>
+
+<body>
+
+<div id="text">Đưa bàn tay trước camera ✋</div>
+<video id="video" autoplay playsinline></video>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+
+/* =========================
+   THREE
+========================= */
+
+const scene = new THREE.Scene();
+
+const camera3D = new THREE.PerspectiveCamera(
+    60,
+    innerWidth / innerHeight,
+    .1,
+    100
+);
+
+camera3D.position.z = 8;
+
+const renderer = new THREE.WebGLRenderer({
+    antialias:true,
+    alpha:true
+});
+
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+
+document.body.appendChild(renderer.domElement);
+
+
+/* =========================
+   PARTICLE SYSTEM
+========================= */
+
+const PARTICLES_PER_SEGMENT = 10;
+
+/*
+5 ngón × 3 đoạn/ngón
+= 15 đoạn
+*/
+
+const segments = [
+    // thumb
+    [1,2],[2,3],[3,4],
+
+    // index
+    [5,6],[6,7],[7,8],
+
+    // middle
+    [9,10],[10,11],[11,12],
+
+    // ring
+    [13,14],[14,15],[15,16],
+
+    // pinky
+    [17,18],[18,19],[19,20]
+];
+
+const COUNT =
+    segments.length * PARTICLES_PER_SEGMENT;
+
+const positions =
+    new Float32Array(COUNT * 3);
+
+const velocities =
+    new Float32Array(COUNT * 3);
+
+const geometry =
+    new THREE.BufferGeometry();
+
+for(let i=0;i<COUNT;i++){
+
+    const i3=i*3;
+
+    positions[i3]=(Math.random()-.5)*5;
+    positions[i3+1]=(Math.random()-.5)*5;
+    positions[i3+2]=(Math.random()-.5)*2;
+
+    velocities[i3]=0;
+    velocities[i3+1]=0;
+    velocities[i3+2]=0;
+}
+
+geometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(positions,3)
+);
+
+const material =
+    new THREE.PointsMaterial({
+
+        color:0x66ccff,
+
+        size:.07,
+
+        transparent:true,
+
+        opacity:.95,
+
+        blending:THREE.AdditiveBlending,
+
+        depthWrite:false
+    });
+
+const particleSystem =
+    new THREE.Points(
+        geometry,
+        material
+    );
+
+scene.add(particleSystem);
+
+
+/* =========================
+   HAND DATA
+========================= */
+
+let hand = null;
+
+
+/* =========================
+   CONVERT CAMERA → 3D
+========================= */
+
+function handTo3D(p){
+
+    return new THREE.Vector3(
+
+        (1-p.x)*8-4,-(p.y*6-3),-p.z*8
+    );
+}
+
+
+/* =========================
+   MEDIAPIPE
+========================= */
+
+const video =
+    document.getElementById("video");
+
+const hands =
+    new Hands({
+
+        locateFile:file =>
+            `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+hands.setOptions({
+
+    maxNumHands:1,
+
+    modelComplexity:1,
+
+    minDetectionConfidence:.6,
+
+    minTrackingConfidence:.6
+});
+
+hands.onResults(results => {
+
+    if(
+        results.multiHandLandmarks &&
+        results.multiHandLandmarks.length
+    ){
+
+        hand =
+            results.multiHandLandmarks[0];
+
+        document.getElementById("text")
+            .textContent =
+            "Đã nhận diện bàn tay ✋";
+
+    }else{
+
+        hand=null;
+
+        document.getElementById("text")
+            .textContent =
+            "Đưa bàn tay trước camera ✋";
+    }
+});
+
+
+/* =========================
+   CAMERA
+========================= */
+
+const cam =
+    new Camera(video,{
+
+        onFrame:async()=>{
+            await hands.send({
+                image:video
+            });
+        },
+
+        width:640,
+        height:480
+    });
+
+cam.start();
+
+
+/* =========================
+   UPDATE PARTICLES
+========================= */
+
+function updateParticles(){
+
+    const pos =
+        geometry.attributes.position.array;
+
+    if(!hand){
+
+        // Khi mất tay, hạt bay nhẹ
+
+        for(let i=0;i<COUNT;i++){
+
+            const i3=i*3;
+
+            pos[i3] +=
+                Math.sin(
+                    performance.now()*.001+i
+                )*.002;
+
+            pos[i3+1] +=
+                Math.cos(
+                    performance.now()*.001+i
+                )*.002;
+        }
+
+        geometry.attributes.position.needsUpdate=true;
+
+        return;
+    }
+
+
+    /*
+       Mỗi đoạn ngón tay có
+       một nhóm hạt riêng
+    */
+
+    segments.forEach(
+        (segment,segmentIndex)=>{
+
+            const a =
+                hand[segment[0]];
+
+            const b =
+                hand[segment[1]];
+
+            if(!a || !b) return;
+
+            const start =
+                handTo3D(a);
+
+            const end =
+                handTo3D(b);
+
+
+            for(
+                let j=0;
+                j<PARTICLES_PER_SEGMENT;
+                j++
+            ){
+
+                const particleIndex =
+                    segmentIndex *
+                    PARTICLES_PER_SEGMENT +
+                    j;
+
+                const i3 =
+                    particleIndex*3;
+
+
+                /*
+                   Hạt nằm dọc đoạn ngón
+                */
+
+                let t =
+                    j /
+                    (PARTICLES_PER_SEGMENT-1);
+
+
+                /*
+                   Cho hạt chạy qua lại
+                   tạo cảm giác dòng năng lượng
+                */
+
+                t +=
+                    Math.sin(
+                        performance.now()*.003+
+                        particleIndex)*.025;t=Math.max(0,Math.min(1,t));
+
+
+                const target =
+                    new THREE.Vector3().lerpVectors(
+                        start,
+                        end,
+                        t
+                    );
+
+
+                /*
+                   Rung nhẹ quanh ngón
+                */
+
+                target.x +=
+                    Math.sin(
+                        performance.now()*.
